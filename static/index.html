@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Threat Intel Lookup</title>
+<style>
+body{font-family:system-ui,sans-serif;max-width:860px;margin:2rem auto;padding:0 1rem;background:#0f1419;color:#e6e6e6}
+input,button{padding:.6rem;font-size:1rem;border-radius:6px;border:1px solid #333;background:#1a212b;color:inherit}
+input{width:100%;box-sizing:border-box;margin-bottom:.5rem} button{cursor:pointer;background:#2563eb;border:0}
+.card{background:#1a212b;border-radius:8px;padding:1rem;margin-top:1rem}
+.err{color:#f87171} pre{white-space:pre-wrap;word-break:break-word;margin:0}
+</style></head><body>
+<h1>Threat Intel Lookup</h1>
+<input id="token" type="password" placeholder="Access token" autocomplete="off">
+<input id="ind" placeholder="IP, domain, URL or file hash">
+<button id="go">Lookup</button>
+<div id="out"></div>
+<script src="/app.js"></script>
+</body></html>
