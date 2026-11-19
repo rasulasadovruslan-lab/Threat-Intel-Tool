@@ -1,4 +1,5 @@
 import asyncio
+import ipaddress
 import logging
 from contextlib import asynccontextmanager
 
@@ -11,11 +12,13 @@ from slowapi.middleware import SlowAPIMiddleware
 from slowapi.util import get_remote_address
 
 from .cache import TTLCache
+from .classifier import IndicatorType as T
 from .classifier import classify
 from .config import get_settings
 from .models import LookupRequest, LookupResponse
 from .providers import build_providers
 from .security import require_token
+from .verdict import assess, build_verdict
 
 logging.basicConfig(level=logging.INFO)
 settings = get_settings()
@@ -34,7 +37,6 @@ async def lifespan(app: FastAPI):
         yield
 
 
-# Interactive docs disabled: nothing extra exposed.
 app = FastAPI(title="Threat Intel Lookup", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
@@ -47,10 +49,23 @@ async def security_headers(request: Request, call_next):
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Referrer-Policy"] = "no-referrer"
-    response.headers["Content-Security-Policy"] = (
-        "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'"
-    )
+    response.headers["Content-Security-Policy"] = "default-src 'self'"
     return response
+
+
+async def resolve_public_ip(providers, domain: str) -> str | None:
+    """Domain -> first public A record, so IP-only sources (AbuseIPDB, Shodan) can be checked too."""
+    dns = next((p for p in providers if p.name == "dns"), None)
+    if dns is None:
+        return None
+    for rec in await dns._query(domain, "A"):
+        try:
+            ip = ipaddress.ip_address(rec)
+        except ValueError:
+            continue
+        if ip.is_global:
+            return str(ip)
+    return None
 
 
 @app.post("/api/lookup", response_model=LookupResponse, dependencies=[Depends(require_token)])
@@ -62,14 +77,29 @@ async def lookup(request: Request, body: LookupRequest) -> LookupResponse:
 
     key = f"{kind}:{value}"
     if (hit := cache.get(key)) is not None:
-        return LookupResponse(indicator=value, type=kind, cached=True, results=hit)
+        return hit.model_copy(update={"cached": True})
 
-    providers = [p for p in request.app.state.providers if kind in p.supports]
-    results = await asyncio.gather(*(p.safe_lookup(kind, value) for p in providers))
+    all_providers = request.app.state.providers
+    direct = [p for p in all_providers if kind in p.supports]
+    results = list(await asyncio.gather(*(p.safe_lookup(kind, value) for p in direct)))
 
-    if any(r.ok for r in results):  # don't cache total failures
-        cache.set(key, results)
-    return LookupResponse(indicator=value, type=kind, cached=False, results=list(results))
+    if kind is T.DOMAIN and (ip := await resolve_public_ip(all_providers, value)):
+        ip_only = [p for p in all_providers if T.IP in p.supports and T.DOMAIN not in p.supports]
+        pivots = await asyncio.gather(*(p.safe_lookup(T.IP, ip) for p in ip_only))
+        for r in pivots:
+            r.note = f"Checked the domain's resolved IP ({ip})"
+        results += pivots
+
+    for r in results:
+        assess(r)
+
+    response = LookupResponse(
+        indicator=value, type=kind, cached=False, results=results, verdict=build_verdict(results),
+        no_data=[r.provider for r in results if r.ok and not r.found and r.provider != "dns"],
+    )
+    if any(r.ok for r in results):  # never cache total failures
+        cache.set(key, response)
+    return response
 
 
 @app.get("/api/health")

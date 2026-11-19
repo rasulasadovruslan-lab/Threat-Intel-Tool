@@ -1,9 +1,6 @@
 # Threat Intel Lookup
-```
-python3.12 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-cp .env.example .env        # fill in keys + APP_TOKEN
-uvicorn app.main:app --host 127.0.0.1 --port 8000
-```
-Open http://127.0.0.1:8000
-# Threat-Intel-Tool
+Type an IP, domain, URL or file hash. It queries VirusTotal, AbuseIPDB and Shodan, shows each source
+separately, and combines them into one 0-100 danger verdict.
+
+1. Copy `.env.example` to `.env` and fill in `APP_TOKEN` + your API keys.
+2. Run `start.bat` (Windows) or `./start.sh` (Mac/Linux). The browser opens automatically.
