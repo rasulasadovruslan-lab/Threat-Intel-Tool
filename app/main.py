@@ -1,4 +1,6 @@
 import asyncio
+import csv
+import io
 import ipaddress
 import logging
 from contextlib import asynccontextmanager
@@ -6,6 +8,7 @@ from datetime import datetime, timezone
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
@@ -121,6 +124,36 @@ async def lookup(request: Request, body: LookupRequest) -> LookupResponse:
     if any(r.ok for r in results):  # never save total failures
         store.save(response)
     return response
+
+
+@app.get("/api/status")
+async def status(request: Request) -> dict:
+    """Which sources are live. Never returns keys, only on/off."""
+    names = {p.name for p in request.app.state.providers}
+    return {
+        "virustotal": "virustotal" in names,
+        "abuseipdb": "abuseipdb" in names,
+        "shodan": "full" if settings.shodan_api_key else "free",
+        "dns": "dns" in names,
+        "ai": bool(settings.ai_api_key),
+    }
+
+
+def _csv_safe(v) -> str:
+    s = str(v if v is not None else "")
+    return "'" + s if s[:1] in ("=", "+", "-", "@", "\t", "\r") else s  # block spreadsheet formula injection
+
+
+@app.get("/api/reports/export.csv")
+async def export_csv() -> Response:
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["indicator", "type", "score_percent", "level", "last_scanned_utc", "has_ai_report"])
+    for it in store.list(limit=100000):
+        w.writerow([_csv_safe(it["indicator"]), it["type"], it["score"] if it["score"] is not None else "",
+                    it["level"], it["updated"], it["has_ai"]])
+    return Response(buf.getvalue(), media_type="text/csv",
+                    headers={"Content-Disposition": 'attachment; filename="threatscope-reports.csv"'})
 
 
 @app.get("/api/reports")

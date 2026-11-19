@@ -5,12 +5,15 @@
 <link rel="stylesheet" href="/style.css">
 </head><body>
 <header class="top"><div class="bar-in">
-  <a class="brand" href="#/"><i></i>Threat<b>Scope</b></a>
+  <a class="brand" href="#/"><i></i><span>Threat</span><b>Scope</b></a>
   <form id="form" autocomplete="off">
-    <input id="ind" placeholder="Search an IP, domain, URL or file hash…" aria-label="Indicator" autofocus>
+    <span id="kind" class="kind" hidden></span>
+    <input id="ind" placeholder="Search an IP, domain, URL or file hash…   ( press / )" aria-label="Indicator" autofocus>
     <button id="go">Search</button>
   </form>
+  <nav class="nav"><a href="#/" data-r="home">Home</a><a href="#/bulk" data-r="bulk">Bulk</a></nav>
 </div></header>
 <main id="view"></main>
+<footer id="status" class="status"></footer>
 <script src="/app.js"></script>
 </body></html>
