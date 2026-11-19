@@ -1,12 +1,16 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Threat Intel Lookup</title>
+<title>ThreatScope</title>
 <link rel="stylesheet" href="/style.css">
-</head><body><main>
-<header><h1>Threat Intel Lookup</h1>
-<input id="token" type="password" placeholder="Access token" autocomplete="off"></header>
-<form id="form"><input id="ind" placeholder="IP, domain, URL or file hash (MD5 / SHA1 / SHA256)" autofocus>
-<button id="go">Check</button></form>
-<div id="out" aria-live="polite"></div>
-</main><script src="/app.js"></script></body></html>
+</head><body>
+<header class="top"><div class="bar-in">
+  <a class="brand" href="#/"><i></i>Threat<b>Scope</b></a>
+  <form id="form" autocomplete="off">
+    <input id="ind" placeholder="Search an IP, domain, URL or file hash…" aria-label="Indicator" autofocus>
+    <button id="go">Search</button>
+  </form>
+</div></header>
+<main id="view"></main>
+<script src="/app.js"></script>
+</body></html>

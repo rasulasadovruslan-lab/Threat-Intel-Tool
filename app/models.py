@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field
 
 class LookupRequest(BaseModel):
     indicator: str = Field(min_length=1, max_length=2048)
+    refresh: bool = False         # force a new scan instead of reusing the saved one
 
 
 class ProviderResult(BaseModel):
@@ -21,15 +22,30 @@ class ProviderResult(BaseModel):
 class Verdict(BaseModel):
     score: int | None
     level: str                    # low | medium | high | unknown
-    sources: int                  # scoring sources that had data
-    queried: int                  # scoring sources we asked
+    sources: int
+    queried: int
     summary: str
 
 
+class AIReport(BaseModel):
+    headline: str
+    summary: str
+    key_findings: list[str]
+    risk_assessment: str
+    recommendations: list[str]
+    confidence: str
+    model: str
+    generated_at: str
+
+
 class LookupResponse(BaseModel):
+    id: str                       # stable per indicator, doubles as the saved page's address
     indicator: str
     type: str
     cached: bool
+    created: str
+    updated: str
     verdict: Verdict
     results: list[ProviderResult]
     no_data: list[str] = []
+    ai_report: AIReport | None = None

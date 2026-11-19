@@ -2,3 +2,5 @@
 .venv/
 __pycache__/
 *.pyc
+# Saved scan pages. Delete this line to commit them to Git.
+reports/
