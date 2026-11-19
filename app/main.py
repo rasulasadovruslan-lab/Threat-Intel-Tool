@@ -4,6 +4,7 @@ import io
 import ipaddress
 import logging
 from contextlib import asynccontextmanager
+import time
 from datetime import datetime, timezone
 
 import httpx
@@ -27,6 +28,8 @@ from .verdict import assess, build_verdict
 logging.basicConfig(level=logging.INFO)
 settings = get_settings()
 store = ReportStore(settings.reports_dir)
+_ai_last: dict[str, float] = {}          # rid -> monotonic time of last AI call (blocks double-clicks)
+_ai_day = {"date": "", "count": 0}      # resets every UTC day
 limiter = Limiter(key_func=get_remote_address, default_limits=[settings.default_rate_limit])
 
 
@@ -136,6 +139,7 @@ async def status(request: Request) -> dict:
         "shodan": "full" if settings.shodan_api_key else "free",
         "dns": "dns" in names,
         "ai": bool(settings.ai_api_key),
+        "ai_cooldown": settings.ai_cooldown,
     }
 
 
@@ -172,14 +176,35 @@ async def delete_report(rid: str) -> dict[str, bool]:
     return {"deleted": store.delete(rid)}
 
 
+def _ai_gate(rid: str, rec: LookupResponse) -> None:
+    """Raises 429 with a readable message when a cooldown or the daily cap applies."""
+    wait = 0.0
+    if rec.ai_report:
+        done = datetime.fromisoformat(rec.ai_report.generated_at)
+        wait = settings.ai_cooldown - (datetime.now(timezone.utc) - done).total_seconds()
+    if rid in _ai_last:
+        wait = max(wait, settings.ai_cooldown - (time.monotonic() - _ai_last[rid]))
+    if wait > 0:
+        raise HTTPException(status_code=429, detail=f"Please wait {int(wait) + 1}s before generating this report again.")
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    if _ai_day["date"] != today:
+        _ai_day.update(date=today, count=0)
+    if _ai_day["count"] >= settings.ai_daily_limit:
+        raise HTTPException(status_code=429, detail=f"Daily AI limit reached ({settings.ai_daily_limit} reports). Try again tomorrow.")
+
+
 @app.post("/api/reports/{rid}/ai", response_model=AIReport)
 @limiter.limit(settings.ai_rate_limit)
 async def ai_report(request: Request, rid: str) -> AIReport:
     rec = _get_or_404(rid)
+    _ai_gate(rid, rec)
+    _ai_last[rid] = time.monotonic()  # claim the slot first so a second click can't slip through
     try:
         report = await generate_report(request.app.state.client, settings, rec)
     except AIError as e:
+        _ai_last.pop(rid, None)  # failed attempts don't cost the user a cooldown or a daily slot
         raise HTTPException(status_code=502, detail=str(e)) from e
+    _ai_day["count"] += 1
     rec.ai_report = report
     store.save(rec)  # the written report is saved into the page too
     return report

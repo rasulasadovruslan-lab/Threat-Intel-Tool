@@ -30,7 +30,7 @@ background:conic-gradient(var(--c) calc(var(--p)*1%),var(--s2) 0)}
 .chips{display:flex;gap:.4rem;flex-wrap:wrap}.chip{font-size:.75rem;padding:.15rem .65rem;border-radius:99px;border:1px solid var(--line);color:var(--muted)}
 .chip.lvl{background:var(--c);color:#191716;border:0;font-weight:700}
 .meta,.muted{color:var(--muted);font-size:.85rem}.actions{display:flex;gap:.5rem;margin-top:.9rem;flex-wrap:wrap}
-.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:1rem}.grid .card{margin:0}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(300px,100%),1fr));gap:1rem}.grid .card{margin:0}
 .src{border-top:3px solid var(--c)}.head{display:flex;justify-content:space-between;align-items:baseline;gap:1rem}
 .head strong{font-size:1.05rem}.pct{font-size:2rem;font-weight:800;color:var(--c);line-height:1}
 .pct.info-only{font-size:.8rem;font-weight:600;color:var(--muted);text-transform:uppercase}
@@ -74,3 +74,8 @@ td,th{padding:.5rem .4rem;border-bottom:1px solid var(--line)}td a{color:var(--g
 .status{max-width:1000px;margin:0 auto;padding:0 1rem 2rem;display:flex;gap:1rem;flex-wrap:wrap;font-size:.78rem;color:var(--muted)}
 .toast{position:fixed;bottom:1.2rem;left:50%;transform:translateX(-50%);background:var(--s2);border:1px solid var(--gold);padding:.5rem 1rem;border-radius:10px;font-size:.88rem;z-index:9}
 .empty{text-align:center;color:var(--muted);padding:2rem 0}
+
+/* long unbroken strings (TXT records, hashes, hostnames) must wrap inside the card */
+.card,.grid>*{min-width:0}
+.card li,.card .meta,.card .pill{overflow-wrap:anywhere;word-break:break-word}
+.src ul{padding-left:1.1rem}

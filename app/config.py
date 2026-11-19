@@ -23,6 +23,8 @@ class Settings(BaseSettings):
     default_rate_limit: str = "120/minute"
     lookup_rate_limit: str = "15/minute"
     ai_rate_limit: str = "5/minute"
+    ai_cooldown: int = 120                # seconds before the same report can be (re)generated again
+    ai_daily_limit: int = 20              # max AI reports per day, protects your free AI quota
     reports_dir: str = "reports"          # saved pages live here, inside the project
 
 

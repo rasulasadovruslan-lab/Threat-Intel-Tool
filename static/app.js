@@ -44,8 +44,8 @@ async function api(path, opts = {}) {
   try { data = await res.json(); } catch { /* no body */ }
   if (!res.ok) {
     const d = data && data.detail;
-    throw new Error(res.status === 429 ? "Slow down a little: rate limit reached."
-      : typeof d === "string" ? d : `Request failed (${res.status})`);
+    throw new Error(typeof d === "string" ? d
+      : res.status === 429 ? "Slow down a little: rate limit reached." : `Request failed (${res.status})`);
   }
   return data;
 }
@@ -173,12 +173,25 @@ function aiSection(rec) {
       if (r.recommendations.length) { el("h4", "", "Recommendations", box); list(r.recommendations, box); }
       el("p", "meta", `${r.model} · ${fmt(r.generated_at)} · AI-generated, verify before acting`, box);
     }
-    const btn = el("button", r ? "ghost" : "", r ? "Regenerate" : "Generate report", box);
+    const label = r ? "Regenerate" : "Generate report";
+    const btn = el("button", r ? "ghost" : "", label, box);
     btn.style.marginTop = ".8rem";
+    // cooldown countdown, based on when the saved report was written
+    const left = () => r ? Math.ceil(AI_COOLDOWN - (Date.now() - new Date(r.generated_at)) / 1000) : 0;
+    if (left() > 0) {
+      btn.disabled = true;
+      const tick = () => {
+        if (!btn.isConnected) return;
+        const n = left();
+        if (n > 0) { btn.textContent = `${label} in ${n}s`; setTimeout(tick, 1000); }
+        else { btn.disabled = false; btn.textContent = label; }
+      };
+      tick();
+    }
     btn.onclick = async () => {
       btn.disabled = true; btn.textContent = "Analysing…";
       try { rec.ai_report = await post(`/api/reports/${rec.id}/ai`); draw(); }
-      catch (e) { btn.disabled = false; btn.textContent = r ? "Regenerate" : "Generate report"; msg.textContent = e.message; msg.className = "err"; }
+      catch (e) { btn.disabled = false; btn.textContent = label; msg.textContent = e.message; msg.className = "err"; }
     };
   }
   draw();
@@ -232,6 +245,7 @@ function render(rec) {
     el("p", "muted", "No data from: " + [...new Set(rec.no_data)].map((n) => NAMES[n] || n).join(", "), view);
 }
 
+let AI_COOLDOWN = 120;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function bulk() {
@@ -274,6 +288,7 @@ async function showStatus() {
   const box = $("status");
   try {
     const s = await api("/api/status");
+    AI_COOLDOWN = s.ai_cooldown || AI_COOLDOWN;
     box.textContent = "";
     [["VirusTotal", s.virustotal ? "" : "off"], ["AbuseIPDB", s.abuseipdb ? "" : "off"],
      ["Shodan " + (s.shodan === "full" ? "(API)" : "(free InternetDB)"), s.shodan === "full" ? "" : "mid"],
