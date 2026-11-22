@@ -29,12 +29,12 @@ class Provider(ABC):
         return self.key_attr is None or bool(self.key)
 
     @abstractmethod
-    async def lookup(self, kind: IndicatorType, value: str) -> dict[str, Any]: ...
+    async def lookup(self, kind: IndicatorType, value: str, deep: bool = True) -> dict[str, Any]: ...
 
-    async def safe_lookup(self, kind: IndicatorType, value: str) -> ProviderResult:
+    async def safe_lookup(self, kind: IndicatorType, value: str, deep: bool = True) -> ProviderResult:
         """Never raises, and never leaks URLs/keys in error text (Shodan puts its key in the query string)."""
         try:
-            return ProviderResult(provider=self.name, ok=True, data=await self.lookup(kind, value))
+            return ProviderResult(provider=self.name, ok=True, data=await self.lookup(kind, value, deep))
         except httpx.HTTPStatusError as e:
             msg = {401: "Invalid API key", 403: "Forbidden", 429: "Rate limited"}.get(
                 e.response.status_code, f"HTTP {e.response.status_code}"

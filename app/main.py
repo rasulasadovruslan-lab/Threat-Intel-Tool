@@ -4,11 +4,10 @@ import io
 import ipaddress
 import logging
 from contextlib import asynccontextmanager
-import time
 from datetime import datetime, timezone
 
 import httpx
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
 from slowapi import Limiter, _rate_limit_exceeded_handler
@@ -16,20 +15,18 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 from slowapi.util import get_remote_address
 
-from .ai import AIError, generate_report
 from .classifier import IndicatorType as T
 from .classifier import classify
 from .config import get_settings
-from .models import AIReport, LookupRequest, LookupResponse
+from .models import LogReport, LogReportIn, LookupRequest, LookupResponse
 from .providers import build_providers
-from .storage import ReportStore
-from .verdict import assess, build_verdict
+from .storage import LogStore, ReportStore
+from .verdict import assess, build_verdict, collect_tags
 
 logging.basicConfig(level=logging.INFO)
 settings = get_settings()
 store = ReportStore(settings.reports_dir)
-_ai_last: dict[str, float] = {}          # rid -> monotonic time of last AI call (blocks double-clicks)
-_ai_day = {"date": "", "count": 0}      # resets every UTC day
+logstore = LogStore(settings.reports_dir)
 limiter = Limiter(key_func=get_remote_address, default_limits=[settings.default_rate_limit])
 
 
@@ -69,6 +66,8 @@ def _get_or_404(rid: str) -> LookupResponse:
     rec = store.load(rid)
     if rec is None:
         raise HTTPException(status_code=404, detail="Report not found")
+    if not rec.tags:  # scans saved before tags existed still get theirs
+        rec.tags = collect_tags(rec.results)
     return rec
 
 
@@ -97,18 +96,18 @@ async def lookup(request: Request, body: LookupRequest) -> LookupResponse:
 
     rid = store.make_id(kind, value)
     existing = store.load(rid)
-    if existing and not body.refresh:
+    if existing and not body.refresh and (existing.deep or not body.deep):
         age = (datetime.now(timezone.utc) - datetime.fromisoformat(existing.updated)).total_seconds()
         if age < settings.cache_ttl:  # fresh saved scan: no API quota spent
-            return existing.model_copy(update={"cached": True})
+            return existing.model_copy(update={"cached": True, "tags": existing.tags or collect_tags(existing.results)})
 
     all_providers = request.app.state.providers
     direct = [p for p in all_providers if kind in p.supports]
-    results = list(await asyncio.gather(*(p.safe_lookup(kind, value) for p in direct)))
+    results = list(await asyncio.gather(*(p.safe_lookup(kind, value, body.deep) for p in direct)))
 
     if kind is T.DOMAIN and (ip := await resolve_public_ip(all_providers, value)):
         ip_only = [p for p in all_providers if T.IP in p.supports and T.DOMAIN not in p.supports]
-        pivots = await asyncio.gather(*(p.safe_lookup(T.IP, ip) for p in ip_only))
+        pivots = await asyncio.gather(*(p.safe_lookup(T.IP, ip, body.deep) for p in ip_only))
         for r in pivots:
             r.note = f"Checked the domain's resolved IP ({ip})"
         results += pivots
@@ -122,7 +121,7 @@ async def lookup(request: Request, body: LookupRequest) -> LookupResponse:
         created=existing.created if existing else now, updated=now,
         results=results, verdict=build_verdict(results),
         no_data=[r.provider for r in results if r.ok and not r.found and r.provider != "dns"],
-        ai_report=existing.ai_report if existing else None,
+        tags=collect_tags(results), deep=body.deep,
     )
     if any(r.ok for r in results):  # never save total failures
         store.save(response)
@@ -138,8 +137,6 @@ async def status(request: Request) -> dict:
         "abuseipdb": "abuseipdb" in names,
         "shodan": "full" if settings.shodan_api_key else "free",
         "dns": "dns" in names,
-        "ai": bool(settings.ai_api_key),
-        "ai_cooldown": settings.ai_cooldown,
     }
 
 
@@ -152,17 +149,31 @@ def _csv_safe(v) -> str:
 async def export_csv() -> Response:
     buf = io.StringIO()
     w = csv.writer(buf)
-    w.writerow(["indicator", "type", "score_percent", "level", "last_scanned_utc", "has_ai_report"])
+    w.writerow(["indicator", "type", "score_percent", "level", "last_scanned_utc", "tags"])
     for it in store.list(limit=100000):
         w.writerow([_csv_safe(it["indicator"]), it["type"], it["score"] if it["score"] is not None else "",
-                    it["level"], it["updated"], it["has_ai"]])
+                    it["level"], it["updated"], _csv_safe("; ".join(it["tags"]))])
     return Response(buf.getvalue(), media_type="text/csv",
                     headers={"Content-Disposition": 'attachment; filename="threatscope-reports.csv"'})
 
 
 @app.get("/api/reports")
-async def list_reports() -> list[dict]:
-    return store.list()
+async def list_reports(tag: str | None = Query(default=None, max_length=60)) -> list[dict]:
+    items = store.list()
+    if tag:
+        t = tag.strip().lower().removeprefix("#")
+        items = [it for it in items if any(t in x for x in it["tags"])]  # "brute" also finds "brute-force"
+    return items
+
+
+@app.get("/api/tags")
+async def list_tags() -> list[dict]:
+    counts: dict[str, int] = {}
+    for it in store.list():
+        for t in it["tags"]:
+            counts[t] = counts.get(t, 0) + 1
+    ranked = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[:200]
+    return [{"tag": t, "count": n} for t, n in ranked]
 
 
 @app.get("/api/reports/{rid}", response_model=LookupResponse)
@@ -176,38 +187,32 @@ async def delete_report(rid: str) -> dict[str, bool]:
     return {"deleted": store.delete(rid)}
 
 
-def _ai_gate(rid: str, rec: LookupResponse) -> None:
-    """Raises 429 with a readable message when a cooldown or the daily cap applies."""
-    wait = 0.0
-    if rec.ai_report:
-        done = datetime.fromisoformat(rec.ai_report.generated_at)
-        wait = settings.ai_cooldown - (datetime.now(timezone.utc) - done).total_seconds()
-    if rid in _ai_last:
-        wait = max(wait, settings.ai_cooldown - (time.monotonic() - _ai_last[rid]))
-    if wait > 0:
-        raise HTTPException(status_code=429, detail=f"Please wait {int(wait) + 1}s before generating this report again.")
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    if _ai_day["date"] != today:
-        _ai_day.update(date=today, count=0)
-    if _ai_day["count"] >= settings.ai_daily_limit:
-        raise HTTPException(status_code=429, detail=f"Daily AI limit reached ({settings.ai_daily_limit} reports). Try again tomorrow.")
+@app.post("/api/logs", response_model=LogReport)
+async def save_log(body: LogReportIn) -> LogReport:
+    """The browser scans the IPs one by one (so you see live progress), then saves the summary here."""
+    rep = LogReport(**body.model_dump(), id=logstore.new_id(), created=_now())
+    logstore.save(rep)
+    return rep
 
 
-@app.post("/api/reports/{rid}/ai", response_model=AIReport)
-@limiter.limit(settings.ai_rate_limit)
-async def ai_report(request: Request, rid: str) -> AIReport:
-    rec = _get_or_404(rid)
-    _ai_gate(rid, rec)
-    _ai_last[rid] = time.monotonic()  # claim the slot first so a second click can't slip through
-    try:
-        report = await generate_report(request.app.state.client, settings, rec)
-    except AIError as e:
-        _ai_last.pop(rid, None)  # failed attempts don't cost the user a cooldown or a daily slot
-        raise HTTPException(status_code=502, detail=str(e)) from e
-    _ai_day["count"] += 1
-    rec.ai_report = report
-    store.save(rec)  # the written report is saved into the page too
-    return report
+@app.get("/api/logs")
+async def list_logs() -> list[dict]:
+    return logstore.list()
+
+
+@app.get("/api/logs/{lid}", response_model=LogReport)
+async def get_log(lid: str) -> LogReport:
+    rep = logstore.load(lid)
+    if rep is None:
+        raise HTTPException(status_code=404, detail="Log report not found")
+    return rep
+
+
+@app.delete("/api/logs/{lid}")
+async def delete_log(lid: str) -> dict[str, bool]:
+    if logstore.load(lid) is None:
+        raise HTTPException(status_code=404, detail="Log report not found")
+    return {"deleted": logstore.delete(lid)}
 
 
 @app.get("/api/health")

@@ -27,7 +27,7 @@ class DNSLookup(Provider):
         except (dns.resolver.NoAnswer, dns.resolver.NXDOMAIN, dns.resolver.NoNameservers, dns.exception.Timeout):
             return []
 
-    async def lookup(self, kind: T, value: str) -> dict[str, Any]:
+    async def lookup(self, kind: T, value: str, deep: bool = True) -> dict[str, Any]:
         if kind is T.IP:
             return {"PTR": await self._query(dns.reversename.from_address(value).to_text(), "PTR")}
         return {rt: await self._query(value, rt) for rt in RECORD_TYPES}

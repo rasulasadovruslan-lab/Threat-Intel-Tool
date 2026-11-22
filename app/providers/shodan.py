@@ -16,7 +16,7 @@ class Shodan(Provider):
     def enabled(self) -> bool:
         return True  # InternetDB needs no key
 
-    async def lookup(self, kind: T, value: str) -> dict[str, Any]:
+    async def lookup(self, kind: T, value: str, deep: bool = True) -> dict[str, Any]:
         if self.key:
             r = await self.client.get(
                 f"https://api.shodan.io/shodan/host/{value}", params={"key": self.key}
@@ -30,6 +30,7 @@ class Shodan(Provider):
                     "found": True, "source": "shodan-api",
                     "ports": d.get("ports"), "vulns": d.get("vulns"),
                     "org": d.get("org"), "os": d.get("os"), "hostnames": d.get("hostnames"),
+                    "tags": d.get("tags"),
                 }
         r = await self.client.get(f"https://internetdb.shodan.io/{value}")
         if r.status_code == 404:
